@@ -42,11 +42,18 @@ SLEEPER_LEAGUE_ID = os.environ.get("SLEEPER_LEAGUE_ID", "")
 #   ("basketball","mens-college-basketball")
 
 PLAYERS_TO_TRACK = [
-    # {"name": "Patrick Mahomes", "espn_id": "3139477", "team_abbr": "KC",
-    #  "sport": "football", "league": "nfl"},
-    # {"name": "Josh Allen", "espn_id": "3918298", "team_abbr": "BUF",
-    #  "sport": "football", "league": "nfl"},
-    # ... add all 22 here
+    {"name": "Patrick Mahomes", "espn_id": "3139477", "team_abbr": "KC",
+     "sport": "football", "league": "nfl"},
+    {"name": "Josh Allen", "espn_id": "3918298", "team_abbr": "BUF",
+     "sport": "football", "league": "nfl"},
+    {"name": "CeeDee Lamb", "espn_id": "4241389", "team_abbr": "DAL",
+     "sport": "football", "league": "nfl"},
+    {"name": "Christian McCaffrey", "espn_id": "3117251", "team_abbr": "SF",
+     "sport": "football", "league": "nfl"},
+    {"name": "Ja'Marr Chase", "espn_id": "4362628", "team_abbr": "CIN",
+     "sport": "football", "league": "nfl"},
+    # ... once this test batch works, add the rest of your 22 here in the
+    # same format
 ]
 
 SCOREBOARD_URLS = {
