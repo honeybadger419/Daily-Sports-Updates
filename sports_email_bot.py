@@ -14,7 +14,7 @@ cron, same pattern as a macro-news bot: secrets -> env vars -> script -> email.
 
 import os
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import smtplib
@@ -69,12 +69,48 @@ NEWS_URLS = {
 
 NEWS_ITEMS_PER_LEAGUE = 5
 
+# Used to filter NCAAF down to Top 25 / Big Ten games only (see ncaaf_filter below).
+# ESPN team abbreviations, current Big Ten membership (18 teams incl. 2024 additions).
+BIG_TEN_TEAMS = {
+    "ILL", "IND", "IOWA", "MD", "MICH", "MSU", "MINN", "NEB", "NW",
+    "OSU", "ORE", "PSU", "PUR", "RUTG", "UCLA", "USC", "WASH", "WIS",
+}
+
 
 # ---------------- SCORES (ESPN public scoreboard API) ----------------
-def get_scores(url):
-    """Returns a list of formatted game strings for one league."""
+def get_week_range():
+    """Monday-Sunday of the current week, as YYYYMMDD strings, for the 'dates' param."""
+    today = datetime.now()
+    monday = today - timedelta(days=today.weekday())
+    sunday = monday + timedelta(days=6)
+    return monday.strftime("%Y%m%d"), sunday.strftime("%Y%m%d")
+
+
+def ncaaf_filter(event):
+    """Keep the game only if a Top 25 team or a Big Ten team is playing."""
+    for c in event["competitions"][0]["competitors"]:
+        rank = c.get("curatedRank", {}).get("current", 99)
+        if rank and rank <= 25:
+            return True
+        abbr = c.get("team", {}).get("abbreviation", "")
+        if abbr in BIG_TEN_TEAMS:
+            return True
+    return False
+
+
+def get_scores(url, date_range=None, filter_fn=None):
+    """Returns a list of formatted game strings for one league.
+
+    date_range: optional (start, end) YYYYMMDD tuple to pull a whole week
+                instead of just today (ESPN defaults to today only).
+    filter_fn: optional function(event) -> bool to keep only matching games.
+    """
+    params = {}
+    if date_range:
+        params["dates"] = f"{date_range[0]}-{date_range[1]}"
+
     try:
-        resp = requests.get(url, timeout=10)
+        resp = requests.get(url, params=params, timeout=10)
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
@@ -82,11 +118,13 @@ def get_scores(url):
 
     games = []
     for event in data.get("events", []):
+        if filter_fn and not filter_fn(event):
+            continue
+
         name = event.get("shortName", event.get("name", "Unknown matchup"))
         status = event["status"]["type"]["shortDetail"]
         competitors = event["competitions"][0]["competitors"]
 
-        # Sort so home/away display consistently, show score if game started
         line = name
         if event["status"]["type"]["state"] != "pre":
             scores = {c["homeAway"]: c.get("score", "0") for c in competitors}
@@ -95,7 +133,7 @@ def get_scores(url):
             line = f"{name} — {status}"
         games.append(line)
 
-    return games or ["No games scheduled today."]
+    return games or ["No games scheduled."]
 
 
 # ---------------- NEWS: TRADES, INJURIES, ROSTER/PLAYER UPDATES ----------------
@@ -284,8 +322,15 @@ def send_email(html_body):
 
 def main():
     sections = {}
+    week_start, week_end = get_week_range()
+
     for league, url in SCOREBOARD_URLS.items():
-        sections[league] = get_scores(url)
+        # NFL and NCAAF play once a week, mostly on weekends — pull the whole
+        # week's games instead of just today, or off-days would show nothing.
+        date_range = (week_start, week_end) if league in ("NFL", "NCAAF") else None
+        filter_fn = ncaaf_filter if league == "NCAAF" else None
+
+        sections[league] = get_scores(url, date_range=date_range, filter_fn=filter_fn)
         sections[f"{league} News (Trades, Injuries, Roster Moves)"] = get_news(NEWS_URLS[league])
 
     if SLEEPER_LEAGUE_ID:
