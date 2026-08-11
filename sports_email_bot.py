@@ -3,9 +3,10 @@ Daily Sports & Fantasy Email Bot
 ---------------------------------
 Fetches:
   - NFL, NBA, NCAAF, NCAAB scores/upcoming games (ESPN public API, no key needed)
+  - League news per sport (trades, injuries, roster moves)
   - Sleeper fantasy football league matchups (public API, no key needed)
-  - ESPN fantasy football league matchups (needs league ID; private leagues
-    also need espn_s2 + SWID cookies)
+  - Individual player watchlist: recent headlines, last game's stat line,
+    and next scheduled game — all via ESPN's public (no-login) endpoints
 
 Sends one HTML summary email each morning. Designed to run via GitHub Actions
 cron, same pattern as a macro-news bot: secrets -> env vars -> script -> email.
@@ -27,10 +28,26 @@ SMTP_PORT = int(os.environ.get("SMTP_PORT", 587))
 
 SLEEPER_LEAGUE_ID = os.environ.get("SLEEPER_LEAGUE_ID", "")
 
-ESPN_LEAGUE_ID = os.environ.get("ESPN_LEAGUE_ID", "")
-ESPN_SEASON = int(os.environ.get("ESPN_SEASON", datetime.now().year))
-ESPN_S2 = os.environ.get("ESPN_S2", "")                # only needed for PRIVATE ESPN leagues
-ESPN_SWID = os.environ.get("ESPN_SWID", "")
+# ---- PLAYER WATCHLIST ----
+# Fill in the players you want tracked. No ESPN login/cookies needed for this —
+# just each player's public ESPN athlete ID, their team abbreviation, and which
+# sport/league they play in.
+#
+# How to find espn_id: go to the player's ESPN page, e.g.
+#   https://www.espn.com/nfl/player/_/id/3139477/patrick-mahomes
+#   -> espn_id is "3139477"
+# team_abbr: ESPN's short team code, e.g. "KC" for Chiefs, "BUF" for Bills.
+# sport/league: matches ESPN's URL scheme, e.g. ("football","nfl"),
+#   ("basketball","nba"), ("football","college-football"),
+#   ("basketball","mens-college-basketball")
+
+PLAYERS_TO_TRACK = [
+    # {"name": "Patrick Mahomes", "espn_id": "3139477", "team_abbr": "KC",
+    #  "sport": "football", "league": "nfl"},
+    # {"name": "Josh Allen", "espn_id": "3918298", "team_abbr": "BUF",
+    #  "sport": "football", "league": "nfl"},
+    # ... add all 22 here
+]
 
 SCOREBOARD_URLS = {
     "NFL": "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
@@ -137,38 +154,105 @@ def get_sleeper_matchups(league_id):
     return lines or ["No Sleeper matchup data yet this week."]
 
 
-# ---------------- ESPN FANTASY FOOTBALL ----------------
-def get_espn_fantasy(league_id, season, espn_s2, swid):
-    if not league_id:
-        return []
-    url = f"https://fantasy.espn.com/apis/v3/games/ffl/seasons/{season}/segments/0/leagues/{league_id}"
-    params = {"view": ["mMatchup", "mTeam"]}
-    cookies = {}
-    if espn_s2 and swid:
-        cookies = {"espn_s2": espn_s2, "SWID": swid}  # required for private leagues
+# ---------------- PLAYER WATCHLIST: NEWS + RECENT STATS + NEXT GAME ----------------
+def get_all_news_articles():
+    """Fetch raw news articles once per league so player search doesn't refetch per player."""
+    articles_by_league = {}
+    for league, url in NEWS_URLS.items():
+        try:
+            resp = requests.get(url, params={"limit": 25}, timeout=10)
+            resp.raise_for_status()
+            articles_by_league[league] = resp.json().get("articles", [])
+        except Exception:
+            articles_by_league[league] = []
+    return articles_by_league
 
+
+def find_player_news(player_name, articles_by_league, max_items=2):
+    matches = []
+    for articles in articles_by_league.values():
+        for article in articles:
+            text = f"{article.get('headline','')} {article.get('description','')}"
+            if player_name.lower() in text.lower():
+                headline = article.get("headline", "").strip()
+                link = article.get("links", {}).get("web", {}).get("href", "")
+                link_html = f' — <a href="{link}">read more</a>' if link else ""
+                matches.append(f"{headline}{link_html}")
+            if len(matches) >= max_items:
+                break
+        if len(matches) >= max_items:
+            break
+    return matches or ["No recent headlines mentioning this player."]
+
+
+def get_player_recent_stats(espn_id, sport, league):
+    """Last logged game's stat line for a player, via ESPN's public gamelog endpoint."""
+    url = f"https://site.web.api.espn.com/apis/common/v3/sports/{sport}/{league}/athletes/{espn_id}/gamelog"
     try:
-        resp = requests.get(url, params=params, cookies=cookies, timeout=10)
+        resp = requests.get(url, timeout=10)
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
-        return [f"⚠️ Could not fetch ESPN fantasy data ({e})"]
+        return f"⚠️ Could not fetch stats ({e})"
 
-    teams = {t["id"]: t.get("location", "") + " " + t.get("nickname", "") for t in data.get("teams", [])}
-    current_week = data.get("scoringPeriodId")
-    lines = []
-    for m in data.get("schedule", []):
-        if m.get("matchupPeriodId") != current_week:
-            continue
-        home = m.get("home", {})
-        away = m.get("away", {})
-        home_name = teams.get(home.get("teamId"), "Team")
-        away_name = teams.get(away.get("teamId"), "Team")
-        home_pts = home.get("totalPoints", 0)
-        away_pts = away.get("totalPoints", 0)
-        lines.append(f"{away_name}: {away_pts:.1f}  vs  {home_name}: {home_pts:.1f}")
+    events = data.get("events", {})
+    season_types = data.get("seasonTypes", [])
+    if not season_types:
+        return "No games logged yet this season."
 
-    return lines or ["No ESPN matchup data yet this week (offseason or week not started)."]
+    try:
+        latest_category = season_types[0]["categories"][0]
+        latest_event_entry = latest_category["events"][-1]
+        event_id = latest_event_entry["eventId"]
+        stat_values = latest_event_entry["stats"]
+        labels = latest_category.get("labels", [])
+        event_meta = events.get(event_id, {})
+        opponent = event_meta.get("opponent", {}).get("abbreviation", "")
+        game_date = event_meta.get("gameDate", "")[:10]
+        stat_line = ", ".join(
+            f"{label}: {value}" for label, value in zip(labels, stat_values) if value not in ("0", "", None)
+        )
+        return f"{stat_line or 'No notable stats'} ({opponent}, {game_date})" if opponent else (stat_line or "No notable stats")
+    except (KeyError, IndexError):
+        return "No recent game log available."
+
+
+def get_player_next_game(team_abbr, sport, league):
+    """Finds the team's next scheduled game from ESPN's team schedule endpoint."""
+    url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams/{team_abbr}/schedule"
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        return f"⚠️ Could not fetch schedule ({e})"
+
+    for event in data.get("events", []):
+        state = event.get("competitions", [{}])[0].get("status", {}).get("type", {}).get("state")
+        if state == "pre":
+            opponent = event.get("shortName", "Unknown matchup")
+            date = event.get("date", "")[:10]
+            return f"{opponent} on {date}"
+    return "No upcoming game found."
+
+
+def build_player_watchlist_section(players):
+    if not players:
+        return {}
+
+    articles_by_league = get_all_news_articles()
+    section = {}
+    for p in players:
+        news = find_player_news(p["name"], articles_by_league)
+        recent = get_player_recent_stats(p["espn_id"], p["sport"], p["league"])
+        next_game = get_player_next_game(p["team_abbr"], p["sport"], p["league"])
+        lines = [
+            "<b>News:</b> " + " | ".join(news),
+            f"<b>Last game:</b> {recent}",
+            f"<b>Next game:</b> {next_game}",
+        ]
+        section[p["name"]] = lines
+    return section
 
 
 # ---------------- EMAIL BUILD + SEND ----------------
@@ -207,10 +291,9 @@ def main():
     if SLEEPER_LEAGUE_ID:
         sections["Sleeper Fantasy Football"] = get_sleeper_matchups(SLEEPER_LEAGUE_ID)
 
-    if ESPN_LEAGUE_ID:
-        sections["ESPN Fantasy Football"] = get_espn_fantasy(
-            ESPN_LEAGUE_ID, ESPN_SEASON, ESPN_S2, ESPN_SWID
-        )
+    player_sections = build_player_watchlist_section(PLAYERS_TO_TRACK)
+    for player_name, lines in player_sections.items():
+        sections[f"👤 {player_name}"] = lines
 
     html = build_email_html(sections)
     send_email(html)
