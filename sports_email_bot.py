@@ -39,6 +39,19 @@ SCOREBOARD_URLS = {
     "NCAAB": "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard",
 }
 
+# ESPN's general "news" feed per league. Headlines here are a mix of trades,
+# injuries, roster moves, and general team/player storylines — ESPN doesn't
+# expose separate clean feeds for each category, so this is the practical
+# single source that covers all of them.
+NEWS_URLS = {
+    "NFL": "https://site.api.espn.com/apis/site/v2/sports/football/nfl/news",
+    "NBA": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/news",
+    "NCAAF": "https://site.api.espn.com/apis/site/v2/sports/football/college-football/news",
+    "NCAAB": "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/news",
+}
+
+NEWS_ITEMS_PER_LEAGUE = 5
+
 
 # ---------------- SCORES (ESPN public scoreboard API) ----------------
 def get_scores(url):
@@ -66,6 +79,31 @@ def get_scores(url):
         games.append(line)
 
     return games or ["No games scheduled today."]
+
+
+# ---------------- NEWS: TRADES, INJURIES, ROSTER/PLAYER UPDATES ----------------
+def get_news(url):
+    """Pulls top headlines (trades, injuries, roster moves, player storylines)."""
+    try:
+        resp = requests.get(url, params={"limit": NEWS_ITEMS_PER_LEAGUE}, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        return [f"⚠️ Could not fetch news ({e})"]
+
+    lines = []
+    for article in data.get("articles", [])[:NEWS_ITEMS_PER_LEAGUE]:
+        headline = article.get("headline", "").strip()
+        description = article.get("description", "").strip()
+        link = ""
+        links = article.get("links", {}).get("web", {}).get("href")
+        if links:
+            link = f' — <a href="{links}">read more</a>'
+        if headline:
+            snippet = f" — {description}" if description else ""
+            lines.append(f"<b>{headline}</b>{snippet}{link}")
+
+    return lines or ["No major headlines right now."]
 
 
 # ---------------- SLEEPER FANTASY FOOTBALL ----------------
@@ -164,6 +202,7 @@ def main():
     sections = {}
     for league, url in SCOREBOARD_URLS.items():
         sections[league] = get_scores(url)
+        sections[f"{league} News (Trades, Injuries, Roster Moves)"] = get_news(NEWS_URLS[league])
 
     if SLEEPER_LEAGUE_ID:
         sections["Sleeper Fantasy Football"] = get_sleeper_matchups(SLEEPER_LEAGUE_ID)
