@@ -146,16 +146,18 @@ def build_email_html(sections):
 
 
 def send_email(html_body):
+    recipients = [addr.strip() for addr in EMAIL_TO.split(",") if addr.strip()]
+
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"Sports Digest — {datetime.now().strftime('%b %d, %Y')}"
     msg["From"] = EMAIL_FROM
-    msg["To"] = EMAIL_TO
+    msg["To"] = ", ".join(recipients)   # just for display in the email header
     msg.attach(MIMEText(html_body, "html"))
 
     with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
         server.starttls()
         server.login(EMAIL_FROM, EMAIL_PASSWORD)
-        server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
+        server.sendmail(EMAIL_FROM, recipients, msg.as_string())  # actual recipient list
 
 
 def main():
