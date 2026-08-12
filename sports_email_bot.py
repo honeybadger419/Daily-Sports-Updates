@@ -104,13 +104,14 @@ def get_week_range():
 
 
 def ncaaf_filter(event):
-    """Keep the game only if a Top 25 team or a Big Ten team is playing."""
+    """Keep the game only if a Top 25 team or a Power 4 team is playing."""
+    power4 = BIG_TEN_TEAMS | SEC_TEAMS | ACC_TEAMS | BIG_TWELVE_TEAMS
     for c in event["competitions"][0]["competitors"]:
         rank = c.get("curatedRank", {}).get("current", 99)
         if rank and rank <= 25:
             return True
         abbr = c.get("team", {}).get("abbreviation", "")
-        if abbr in BIG_TEN_TEAMS:
+        if abbr in power4:
             return True
     return False
 
