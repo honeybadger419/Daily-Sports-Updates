@@ -82,8 +82,18 @@ BIG_TEN_TEAMS = {
     "ILL", "IND", "IOWA", "MD", "MICH", "MSU", "MINN", "NEB", "NW",
     "OSU", "ORE", "PSU", "PUR", "RUTG", "UCLA", "USC", "WASH", "WIS",
 }
-
-
+SEC_TEAMS = {
+    "ALA", "ARK", "AUB", "FLA", "UGA", "UK", "LSU", "MSST", "MIZ", "OU", 
+    "MISS", "SC", "TENN", "TA&M", "TEX", "VAN"
+}
+ACC_TEAMS = {
+    "BC", "CAL", "CLEM", "DUKE", "FSU", "GT", "LOU", "MIA", "NCSU", "UNC", 
+    "PITT", "SMU", "STAN", "SYR", "UVA", "VT", "WAKE"
+}
+BIG_TWELVE_TEAMS = {
+    "ASU", "ARIZ", "BYU", "BAY", "CIN", "COLO", "HOU", "ISU", "KU", "KSU", 
+    "OKST", "TCU", "TTU", "UCF", "UTAH", "WVU"
+}
 # ---------------- SCORES (ESPN public scoreboard API) ----------------
 def get_week_range():
     """Monday-Sunday of the current week, as YYYYMMDD strings, for the 'dates' param."""
