@@ -12,20 +12,6 @@ Sends one HTML summary email each morning. Designed to run via GitHub Actions
 cron, same pattern as a macro-news bot: secrets -> env vars -> script -> email.
 """
 
-"""
-Things to add:
-
-- Lions News Section
-- Playoff Standings as of that Date (NFL)
-- Player Stats & News of our fantasy teams
-- Constantly updating Group of 5 top 10/15/20/25 (CFB)
-- Betting Model?
-- Ranked Matchups for that week
-- Top 3 Stat leaders for that week (Passing Yards & TDs, Rushing Yards & TDs, Receiving Yards & TDs, Sacks & INTs, etc.)
-
-
-"""
-
 import os
 import requests
 from datetime import datetime, timedelta
@@ -97,17 +83,19 @@ BIG_TEN_TEAMS = {
     "OSU", "ORE", "PSU", "PUR", "RUTG", "UCLA", "USC", "WASH", "WIS",
 }
 SEC_TEAMS = {
-    "ALA", "ARK", "AUB", "FLA", "UGA", "UK", "LSU", "MSST", "MIZ", "OU", 
+    "ALA", "ARK", "AUB", "FLA", "UGA", "UK", "LSU", "MSST", "MIZ", "OU",
     "MISS", "SC", "TENN", "TA&M", "TEX", "VAN"
 }
 ACC_TEAMS = {
-    "BC", "CAL", "CLEM", "DUKE", "FSU", "GT", "LOU", "MIA", "NCSU", "UNC", 
+    "BC", "CAL", "CLEM", "DUKE", "FSU", "GT", "LOU", "MIA", "NCSU", "UNC",
     "PITT", "SMU", "STAN", "SYR", "UVA", "VT", "WAKE"
 }
 BIG_TWELVE_TEAMS = {
-    "ASU", "ARIZ", "BYU", "BAY", "CIN", "COLO", "HOU", "ISU", "KU", "KSU", 
+    "ASU", "ARIZ", "BYU", "BAY", "CIN", "COLO", "HOU", "ISU", "KU", "KSU",
     "OKST", "TCU", "TTU", "UCF", "UTAH", "WVU"
 }
+
+
 # ---------------- SCORES (ESPN public scoreboard API) ----------------
 def get_week_range():
     """Monday-Sunday of the current week, as YYYYMMDD strings, for the 'dates' param."""
@@ -166,6 +154,25 @@ def get_scores(url, date_range=None, filter_fn=None):
         games.append(line)
 
     return games or ["No games scheduled."]
+
+
+def get_scores_with_weekly_fallback(url, filter_fn=None, max_weeks_ahead=8):
+    """Like get_scores, but if the current calendar week has nothing (e.g.
+    NCAAF before the season starts), keeps stepping forward one week at a
+    time until it finds a week with games — capped at max_weeks_ahead so it
+    can't loop forever. Once the season is underway, this naturally lands on
+    whatever week is actually current, so no separate logic is needed for
+    'week updates as the season progresses' — it's the same mechanism.
+    """
+    start, end = get_week_range()
+    for _ in range(max_weeks_ahead):
+        games = get_scores(url, date_range=(start, end), filter_fn=filter_fn)
+        if games != ["No games scheduled."]:
+            return games
+        start_dt = datetime.strptime(start, "%Y%m%d") + timedelta(days=7)
+        end_dt = datetime.strptime(end, "%Y%m%d") + timedelta(days=7)
+        start, end = start_dt.strftime("%Y%m%d"), end_dt.strftime("%Y%m%d")
+    return ["No games scheduled."]
 
 
 # ---------------- NEWS: TRADES, INJURIES, ROSTER/PLAYER UPDATES ----------------
@@ -343,26 +350,37 @@ def send_email(html_body):
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"Sports Digest — {datetime.now().strftime('%b %d, %Y')}"
     msg["From"] = EMAIL_FROM
-    msg["To"] = ", ".join(recipients)   # just for display in the email header
+    msg["To"] = EMAIL_FROM   # only sender shows in the header — real recipients are BCC'd below
     msg.attach(MIMEText(html_body, "html"))
 
     with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
         server.starttls()
         server.login(EMAIL_FROM, EMAIL_PASSWORD)
-        server.sendmail(EMAIL_FROM, recipients, msg.as_string())  # actual recipient list
+        server.sendmail(EMAIL_FROM, recipients, msg.as_string())  # actual delivery list (BCC behavior)
 
 
 def main():
     sections = {}
     week_start, week_end = get_week_range()
+    today_str = datetime.now().strftime("%Y%m%d")
 
     for league, url in SCOREBOARD_URLS.items():
-        # NFL and NCAAF play once a week, mostly on weekends — pull the whole
+        # NFL plays once a week, mostly on weekends — pull the whole calendar
         # week's games instead of just today, or off-days would show nothing.
-        date_range = (week_start, week_end) if league in ("NFL", "NCAAF") else None
-        filter_fn = ncaaf_filter if league == "NCAAF" else None
+        # NBA/NCAAB are pinned to exactly today's date — without an explicit
+        # date, ESPN's API falls back to showing the *next* slate of games
+        # (which during the off-season can be weeks or months away) instead
+        # of correctly reporting "no games today."
+        # NCAAF uses the weekly-fallback search: right now (pre-season) it
+        # steps forward until it finds Week 1; once the season starts it
+        # naturally lands on the actual current week, updating automatically.
+        if league == "NCAAF":
+            sections[league] = get_scores_with_weekly_fallback(url, filter_fn=ncaaf_filter)
+        elif league == "NFL":
+            sections[league] = get_scores(url, date_range=(week_start, week_end))
+        else:
+            sections[league] = get_scores(url, date_range=(today_str, today_str))
 
-        sections[league] = get_scores(url, date_range=date_range, filter_fn=filter_fn)
         sections[f"{league} News (Trades, Injuries, Roster Moves)"] = get_news(NEWS_URLS[league])
 
     if SLEEPER_LEAGUE_ID:
