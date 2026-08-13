@@ -10,6 +10,17 @@ Fetches:
 
 Sends one HTML summary email each morning. Designed to run via GitHub Actions
 cron, same pattern as a macro-news bot: secrets -> env vars -> script -> email.
+
+Things to add:
+
+- Lions News Section
+- Playoff Standings as of that Date (NFL)
+- Player Stats & News of our fantasy teams
+- Constantly updating Group of 5 top 10/15/20/25 (CFB)
+- Betting Model?
+- Ranked Matchups for that week
+- Top 3 Stat leaders for that week (Passing Yards & TDs, Rushing Yards & TDs, Receiving Yards & TDs, Sacks & INTs, etc.)
+
 """
 
 import os
