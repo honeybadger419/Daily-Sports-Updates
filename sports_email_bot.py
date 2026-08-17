@@ -2,17 +2,16 @@
 Daily Sports & Fantasy Email Bot
 ---------------------------------
 Fetches:
-  - NFL, NBA, NCAAF, NCAAB scores/upcoming games (ESPN public API, no key needed)
-  - League news per sport (trades, injuries, roster moves)
-  - Sleeper fantasy football league matchups (public API, no key needed)
-  - Individual player watchlist: recent headlines, last game's stat line,
-    and next scheduled game — all via ESPN's public (no-login) endpoints
+- NFL, NBA, NCAAF, NCAAB scores/upcoming games (ESPN public API, no key needed)
+- League news per sport (trades, injuries, roster moves)
+- Sleeper fantasy football league matchups (public API, no key needed)
+- Individual player watchlist: recent headlines, last game's stat line,
+  and next scheduled game — all via ESPN's public (no-login) endpoints
 
 Sends one HTML summary email each morning. Designed to run via GitHub Actions
 cron, same pattern as a macro-news bot: secrets -> env vars -> script -> email.
 
 Things to add:
-
 - Lions News Section
 - Playoff Standings as of that Date (NFL)
 - Player Stats & News of our fantasy teams
@@ -20,7 +19,6 @@ Things to add:
 - Betting Model?
 - Ranked Matchups for that week
 - Top 3 Stat leaders for that week (Passing Yards & TDs, Rushing Yards & TDs, Receiving Yards & TDs, Sacks & INTs, etc.)
-
 """
 
 import os
@@ -33,10 +31,9 @@ import smtplib
 # ---------------- CONFIG (all pulled from environment / GitHub Secrets) ----------------
 EMAIL_FROM = os.environ["EMAIL_FROM"]
 EMAIL_TO = os.environ["EMAIL_TO"]
-EMAIL_PASSWORD = os.environ["EMAIL_PASSWORD"]          # Gmail App Password (not your normal password)
+EMAIL_PASSWORD = os.environ["EMAIL_PASSWORD"]  # Gmail App Password (not your normal password)
 SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", 587))
-
 SLEEPER_LEAGUE_ID = os.environ.get("SLEEPER_LEAGUE_ID", "")
 
 # ---- PLAYER WATCHLIST ----
@@ -51,7 +48,6 @@ SLEEPER_LEAGUE_ID = os.environ.get("SLEEPER_LEAGUE_ID", "")
 # sport/league: matches ESPN's URL scheme, e.g. ("football","nfl"),
 #   ("basketball","nba"), ("football","college-football"),
 #   ("basketball","mens-college-basketball")
-
 PLAYERS_TO_TRACK = [
     {"name": "Patrick Mahomes", "espn_id": "3139477", "team_abbr": "KC",
      "sport": "football", "league": "nfl"},
@@ -106,8 +102,8 @@ BIG_TWELVE_TEAMS = {
     "OKST", "TCU", "TTU", "UCF", "UTAH", "WVU"
 }
 
-
 # ---------------- SCORES (ESPN public scoreboard API) ----------------
+
 def get_week_range():
     """Monday-Sunday of the current week, as YYYYMMDD strings, for the 'dates' param."""
     today = datetime.now()
@@ -133,17 +129,26 @@ def get_scores(url, date_range=None, filter_fn=None):
     """Returns a list of formatted game strings for one league.
 
     date_range: optional (start, end) YYYYMMDD tuple to pull a whole week
-                instead of just today (ESPN defaults to today only).
+        instead of just today (ESPN defaults to today only).
     filter_fn: optional function(event) -> bool to keep only matching games.
     """
     params = {}
     if date_range:
         params["dates"] = f"{date_range[0]}-{date_range[1]}"
 
+    resp = None
     try:
         resp = requests.get(url, params=params, timeout=10)
         resp.raise_for_status()
         data = resp.json()
+    except requests.exceptions.HTTPError as e:
+        if resp is not None and resp.status_code == 404:
+            # ESPN 404s some sport scoreboards (e.g. NCAAB) instead of
+            # returning an empty events list when that sport's season
+            # hasn't started yet. Treat that the same as "no games" rather
+            # than surfacing it as an error.
+            return ["No games scheduled."]
+        return [f"⚠️ Could not fetch data ({e})"]
     except Exception as e:
         return [f"⚠️ Could not fetch data ({e})"]
 
@@ -151,11 +156,9 @@ def get_scores(url, date_range=None, filter_fn=None):
     for event in data.get("events", []):
         if filter_fn and not filter_fn(event):
             continue
-
         name = event.get("shortName", event.get("name", "Unknown matchup"))
         status = event["status"]["type"]["shortDetail"]
         competitors = event["competitions"][0]["competitors"]
-
         line = name
         if event["status"]["type"]["state"] != "pre":
             scores = {c["homeAway"]: c.get("score", "0") for c in competitors}
@@ -187,6 +190,7 @@ def get_scores_with_weekly_fallback(url, filter_fn=None, max_weeks_ahead=8):
 
 
 # ---------------- NEWS: TRADES, INJURIES, ROSTER/PLAYER UPDATES ----------------
+
 def get_news(url):
     """Pulls top headlines (trades, injuries, roster moves, player storylines)."""
     try:
@@ -212,13 +216,14 @@ def get_news(url):
 
 
 # ---------------- SLEEPER FANTASY FOOTBALL ----------------
+
 def get_sleeper_matchups(league_id):
     if not league_id:
         return []
     try:
         week = requests.get("https://api.sleeper.app/v1/state/nfl", timeout=10).json()["week"]
         users = {u["user_id"]: u["display_name"] for u in
-                  requests.get(f"https://api.sleeper.app/v1/league/{league_id}/users", timeout=10).json()}
+                 requests.get(f"https://api.sleeper.app/v1/league/{league_id}/users", timeout=10).json()}
         rosters = {r["roster_id"]: users.get(r["owner_id"], "Unknown") for r in
                    requests.get(f"https://api.sleeper.app/v1/league/{league_id}/rosters", timeout=10).json()}
         matchups = requests.get(
@@ -238,11 +243,13 @@ def get_sleeper_matchups(league_id):
             t1, t2 = teams
             name1 = rosters.get(t1["roster_id"], "Team A")
             name2 = rosters.get(t2["roster_id"], "Team B")
-            lines.append(f"{name1}: {t1.get('points', 0):.1f}  vs  {name2}: {t2.get('points', 0):.1f}")
+            lines.append(f"{name1}: {t1.get('points', 0):.1f} vs {name2}: {t2.get('points', 0):.1f}")
+
     return lines or ["No Sleeper matchup data yet this week."]
 
 
 # ---------------- PLAYER WATCHLIST: NEWS + RECENT STATS + NEXT GAME ----------------
+
 def get_all_news_articles():
     """Fetch raw news articles once per league so player search doesn't refetch per player."""
     articles_by_league = {}
@@ -294,9 +301,11 @@ def get_player_recent_stats(espn_id, sport, league):
         event_id = latest_event_entry["eventId"]
         stat_values = latest_event_entry["stats"]
         labels = latest_category.get("labels", [])
+
         event_meta = events.get(event_id, {})
         opponent = event_meta.get("opponent", {}).get("abbreviation", "")
         game_date = event_meta.get("gameDate", "")[:10]
+
         stat_line = ", ".join(
             f"{label}: {value}" for label, value in zip(labels, stat_values) if value not in ("0", "", None)
         )
@@ -321,6 +330,7 @@ def get_player_next_game(team_abbr, sport, league):
             opponent = event.get("shortName", "Unknown matchup")
             date = event.get("date", "")[:10]
             return f"{opponent} on {date}"
+
     return "No upcoming game found."
 
 
@@ -334,16 +344,19 @@ def build_player_watchlist_section(players):
         news = find_player_news(p["name"], articles_by_league)
         recent = get_player_recent_stats(p["espn_id"], p["sport"], p["league"])
         next_game = get_player_next_game(p["team_abbr"], p["sport"], p["league"])
+
         lines = [
             "<b>News:</b> " + " | ".join(news),
             f"<b>Last game:</b> {recent}",
             f"<b>Next game:</b> {next_game}",
         ]
         section[p["name"]] = lines
+
     return section
 
 
 # ---------------- EMAIL BUILD + SEND ----------------
+
 def build_email_html(sections):
     today = datetime.now().strftime("%A, %B %d, %Y")
     html = f"<h2>🏈🏀 Daily Sports Digest — {today}</h2>"
@@ -361,7 +374,7 @@ def send_email(html_body):
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"Sports Digest — {datetime.now().strftime('%b %d, %Y')}"
     msg["From"] = EMAIL_FROM
-    msg["To"] = EMAIL_FROM   # only sender shows in the header — real recipients are BCC'd below
+    msg["To"] = EMAIL_FROM  # only sender shows in the header — real recipients are BCC'd below
     msg.attach(MIMEText(html_body, "html"))
 
     with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
